@@ -29,9 +29,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info("application_started", extra={"environment": app_settings.environment})
 
-        # Create database tables during development
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+       
 
         yield
 

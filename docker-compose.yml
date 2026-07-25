@@ -18,6 +18,8 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    ports:
+    - "5432:5432"
     env_file:
       - .env
     environment:
@@ -40,4 +42,3 @@ volumes:
 
 networks:
   codepilot_internal:
-    internal: true

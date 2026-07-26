@@ -5,3 +5,22 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+# Archives
+*.zip
+
+# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# Environment
+.env
+
+# macOS
+.DS_Store

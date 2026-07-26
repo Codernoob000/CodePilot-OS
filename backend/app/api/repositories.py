@@ -6,13 +6,22 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies import get_current_user
 from app.db.session import get_db
+from app.models.user import User
+from app.repositories.project_repository import ProjectRepository
+from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.repository import (
     RepositoryCreate,
     RepositoryResponse,
     RepositoryUpdate,
 )
+from app.services.project_service import (
+    ProjectNotFoundError,
+    UnauthorizedProjectAccessError,
+)
 from app.services.repository_service import (
+    DuplicateRepositoryNameError,
     RepositoryNotFoundError,
     RepositoryService,
 )
@@ -20,11 +29,19 @@ from app.services.repository_service import (
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
+ProjectId = Annotated[
+    UUID,
+    Query(description="Project owning the repositories."),
+]
 
 
 def get_repository_service(session: DatabaseSession) -> RepositoryService:
     """Build a repository service from the request-scoped database session."""
-    return RepositoryService(session)
+    return RepositoryService(
+        repository=RepositoryRepository(session),
+        project_repository=ProjectRepository(session),
+    )
 
 
 RepositoryServiceDependency = Annotated[
@@ -42,9 +59,17 @@ RepositoryServiceDependency = Annotated[
 async def create_repository(
     payload: RepositoryCreate,
     service: RepositoryServiceDependency,
+    current_user: CurrentUser,
 ) -> RepositoryResponse:
     """Create and return a repository resource."""
-    repository = await service.create_repository(payload)
+    try:
+        repository = await service.create_repository(payload, current_user.id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DuplicateRepositoryNameError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except UnauthorizedProjectAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return RepositoryResponse.model_validate(repository)
 
 
@@ -56,11 +81,16 @@ async def create_repository(
 )
 async def list_repositories(
     service: RepositoryServiceDependency,
-    offset: int = Query(default=0, ge=0, description="Number of repositories to skip."),
-    limit: int = Query(default=100, ge=1, le=1_000, description="Maximum results to return."),
+    project_id: ProjectId,
+    current_user: CurrentUser,
 ) -> list[RepositoryResponse]:
-    """Return repositories in reverse creation order with bounded pagination."""
-    repositories = await service.list_repositories(offset=offset, limit=limit)
+    """Return repositories belonging to a project."""
+    try:
+        repositories = await service.list_repositories(project_id, current_user.id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except UnauthorizedProjectAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return [RepositoryResponse.model_validate(repository) for repository in repositories]
 
 
@@ -73,12 +103,17 @@ async def list_repositories(
 async def get_repository(
     repository_id: UUID,
     service: RepositoryServiceDependency,
+    current_user: CurrentUser,
 ) -> RepositoryResponse:
     """Return one repository by UUID."""
     try:
-        repository = await service.get_repository(repository_id)
+        repository = await service.get_repository(repository_id, current_user.id)
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except UnauthorizedProjectAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return RepositoryResponse.model_validate(repository)
 
 
@@ -92,17 +127,23 @@ async def update_repository(
     repository_id: UUID,
     payload: RepositoryUpdate,
     service: RepositoryServiceDependency,
+    current_user: CurrentUser,
 ) -> RepositoryResponse:
     """Apply a partial update and return the updated repository."""
     try:
-        repository = await service.update_repository(repository_id, payload)
+        repository = await service.update_repository(
+            repository_id,
+            current_user.id,
+            payload,
+        )
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DuplicateRepositoryNameError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except UnauthorizedProjectAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return RepositoryResponse.model_validate(repository)
 
 
@@ -114,10 +155,14 @@ async def update_repository(
 async def delete_repository(
     repository_id: UUID,
     service: RepositoryServiceDependency,
+    current_user: CurrentUser,
 ) -> None:
     """Delete a repository by UUID."""
     try:
-        await service.delete_repository(repository_id)
+        await service.delete_repository(repository_id, current_user.id)
     except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except UnauthorizedProjectAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

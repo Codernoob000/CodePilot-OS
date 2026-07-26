@@ -1,118 +1,152 @@
-"""Business operations for repository persistence."""
-
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.repository import Repository
+from app.repositories.project_repository import ProjectRepository
+from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.repository import RepositoryCreate, RepositoryUpdate
-
+from app.services.project_service import (
+    ProjectNotFoundError,
+    UnauthorizedProjectAccessError,
+)
 
 class RepositoryServiceError(Exception):
-    """Base exception for repository business-operation failures."""
+    """Base exception for repository service."""
 
 
 class RepositoryNotFoundError(RepositoryServiceError):
-    """Raised when a requested repository does not exist."""
+    """Raised when a repository cannot be found."""
 
-    def __init__(self, repository_id: UUID) -> None:
-        super().__init__(f"Repository {repository_id} was not found.")
-        self.repository_id = repository_id
+
+class DuplicateRepositoryNameError(RepositoryServiceError):
+    """Raised when a duplicate repository name exists in a project."""
+
+
+class UnauthorizedRepositoryAccessError(RepositoryServiceError):
+    """Raised when a user accesses a repository they do not own."""
 
 
 class RepositoryService:
-    """Coordinate repository business rules and persistence operations."""
+    def __init__(
+        self,
+        repository: RepositoryRepository,
+        project_repository: ProjectRepository,
+    ) -> None:
+        self.repository = repository
+        self.project_repository = project_repository
 
-    def __init__(self, session: AsyncSession) -> None:
-        """Create a service backed by an injected database session."""
-        self._session = session
+    async def create_repository(
+        self,
+        data: RepositoryCreate,
+        owner_id: UUID,
+    ) -> Repository:
+        """
+        Create a repository inside a project.
+        """
 
-    async def create_repository(self, payload: RepositoryCreate) -> Repository:
-        """Create, persist, and return a repository from validated input."""
-        repository = Repository(**self._payload_values(payload))
-        self._session.add(repository)
+        project = await self.project_repository.get_by_id(data.project_id)
 
-        try:
-            await self._session.commit()
-            await self._session.refresh(repository)
-        except Exception:
-            await self._session.rollback()
-            raise
+        if project is None:
+            raise ProjectNotFoundError("Project not found.")
 
-        return repository
+        if project.owner_id != owner_id:
+            raise UnauthorizedProjectAccessError(
+                "You do not own this project."
+            )
+
+        exists = await self.repository.exists_by_name(
+            data.project_id,
+            data.name,
+        )
+
+        if exists:
+            raise DuplicateRepositoryNameError(
+                "Repository name already exists in this project."
+            )
+
+        return await self.repository.create(data)
 
     async def list_repositories(
         self,
-        *,
-        offset: int = 0,
-        limit: int = 100,
+        project_id: UUID,
+        owner_id: UUID,
     ) -> list[Repository]:
-        """Return repositories in stable creation order with bounded pagination."""
-        if offset < 0:
-            raise ValueError("Repository list offset cannot be negative.")
-        if not 1 <= limit <= 1_000:
-            raise ValueError("Repository list limit must be between 1 and 1000.")
+        """Return all repositories belonging to a project."""
+        project = await self.project_repository.get_by_id(project_id)
 
-        statement = (
-            select(Repository)
-            .order_by(Repository.created_at.desc(), Repository.id)
-            .offset(offset)
-            .limit(limit)
-        )
-        result = await self._session.execute(statement)
-        return list(result.scalars().all())
+        if project is None:
+            raise ProjectNotFoundError("Project not found.")
 
-    async def get_repository(self, repository_id: UUID) -> Repository:
-        """Return one repository or raise a domain-level not-found error."""
-        repository = await self._session.get(Repository, repository_id)
+        if project.owner_id != owner_id:
+            raise UnauthorizedProjectAccessError(
+                "You do not own this project."
+            )
+
+        return await self.repository.get_all_for_project(project_id)
+
+    async def get_repository(
+        self,
+        repository_id: UUID,
+        owner_id: UUID,
+    ) -> Repository:
+        """Return a repository if the owner has access."""
+        repository = await self.repository.get_by_id(repository_id)
+
         if repository is None:
-            raise RepositoryNotFoundError(repository_id)
+            raise RepositoryNotFoundError("Repository not found.")
+
+        project = await self.project_repository.get_by_id(
+            repository.project_id
+        )
+
+        if project is None:
+            raise ProjectNotFoundError("Project not found.")
+
+        if project.owner_id != owner_id:
+            raise UnauthorizedProjectAccessError(
+                "You do not own this project."
+            )
+
         return repository
 
     async def update_repository(
         self,
         repository_id: UUID,
-        payload: RepositoryUpdate,
+        owner_id: UUID,
+        data: RepositoryUpdate,
     ) -> Repository:
-        """Apply a validated partial update and return the persisted repository."""
-        values = self._payload_values(payload, exclude_unset=True)
-        if not values:
-            raise ValueError("At least one repository field is required for an update.")
+        """Update an existing repository."""
+        repository = await self.get_repository(
+            repository_id,
+            owner_id,
+        )
 
-        repository = await self.get_repository(repository_id)
-        for field_name, value in values.items():
-            setattr(repository, field_name, value)
+        if data.name is not None:
 
-        try:
-            await self._session.commit()
-            await self._session.refresh(repository)
-        except Exception:
-            await self._session.rollback()
-            raise
+            exists = await self.repository.exists_by_name_excluding_id(
+            repository.project_id,
+                repository.id,
+                data.name,
+            )
 
-        return repository
+            if exists:
+                raise DuplicateRepositoryNameError(
+                    "Repository name already exists in this project."
+                )
 
-    async def delete_repository(self, repository_id: UUID) -> None:
-        """Delete a repository, raising when the requested record is absent."""
-        repository = await self.get_repository(repository_id)
-        await self._session.delete(repository)
+        return await self.repository.update(
+            repository,
+            data,
+        )
 
-        try:
-            await self._session.commit()
-        except Exception:
-            await self._session.rollback()
-            raise
+    async def delete_repository(
+        self,
+        repository_id: UUID,
+        owner_id: UUID,
+    ) -> None:
+        """Delete a repository."""
+        repository = await self.get_repository(
+            repository_id,
+            owner_id,
+        )
 
-    @staticmethod
-    def _payload_values(
-        payload: RepositoryCreate | RepositoryUpdate,
-        *,
-        exclude_unset: bool = False,
-    ) -> dict[str, object]:
-        """Convert validated schema values to SQLAlchemy-compatible values."""
-        values = payload.model_dump(exclude_unset=exclude_unset)
-        if values.get("github_url") is not None:
-            values["github_url"] = str(values["github_url"])
-        return values
-
+        await self.repository.delete(repository)

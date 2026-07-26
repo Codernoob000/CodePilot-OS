@@ -5,8 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
-from sqlalchemy.orm import Mapped, mapped_column
-
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
@@ -62,4 +61,10 @@ class User(Base):
         nullable=False,
         default=utc_now,
         onupdate=utc_now,
+    )
+
+    projects: Mapped[list["Project"]] = relationship(
+    "Project",
+    back_populates="owner",
+    cascade="all, delete-orphan",
     )

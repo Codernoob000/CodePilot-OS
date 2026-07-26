@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     github_client_id: str | None = None
     github_client_secret: str | None = None
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
 
 
 @lru_cache

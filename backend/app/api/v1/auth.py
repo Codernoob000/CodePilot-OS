@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from app.models.user import User
 from app.core.security import create_access_token
-from app.schemas.user import UserLogin, Token
+from app.schemas.user import  Token
 from app.services.user import InvalidCredentialsError
 from app.schemas.user import UserCreate, UserRead
 from app.services.user import (
@@ -49,13 +50,13 @@ async def register(
     status_code=status.HTTP_200_OK,
 )
 async def login(
-    credentials: UserLogin,
+    form_data: OAuth2PasswordRequestForm = Depends(),
     service: UserService = Depends(get_user_service),
 ):
     try:
         user = await service.authenticate_user(
-            email=credentials.email,
-            password=credentials.password,
+            email=form_data.username,
+            password=form_data.password,
         )
 
         access_token = create_access_token(str(user.id))

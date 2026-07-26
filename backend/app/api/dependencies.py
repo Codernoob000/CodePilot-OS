@@ -1,5 +1,6 @@
 """Reusable FastAPI dependencies."""
-
+from app.repositories.project_repository import ProjectRepository
+from app.services.project_service import ProjectService
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -65,3 +66,14 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials.",
         ) from exc
+
+def get_project_repository(
+    db: AsyncSession = Depends(get_db),
+) -> ProjectRepository:
+    return ProjectRepository(db)
+
+
+def get_project_service(
+    repository: ProjectRepository = Depends(get_project_repository),
+) -> ProjectService:
+    return ProjectService(repository)

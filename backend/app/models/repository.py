@@ -71,11 +71,18 @@ class Repository(Base):
         nullable=False,
         default="main",
     )
+
     is_connected: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
     )
+
+    local_path: Mapped[str | None] = mapped_column(
+    String(500),
+    nullable=True,
+    )   
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -92,3 +99,4 @@ class Repository(Base):
         "Project",
         back_populates="repositories",
     )
+

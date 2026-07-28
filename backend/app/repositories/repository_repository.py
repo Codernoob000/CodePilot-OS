@@ -129,3 +129,22 @@ class RepositoryRepository:
         except Exception:
             await self.session.rollback()
             raise
+
+    async def update_local_path(
+    self,
+    repository: Repository,
+    local_path: str,
+    ) -> Repository:
+        """Update the local path of a cloned repository."""
+
+        repository.local_path = local_path
+        repository.is_connected = True
+
+        try:
+            await self.session.commit()
+            await self.session.refresh(repository)
+        except Exception:
+            await self.session.rollback()
+            raise
+
+        return repository

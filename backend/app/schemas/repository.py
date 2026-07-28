@@ -85,5 +85,16 @@ class RepositoryResponse(BaseModel):
     )
     default_branch: str
     is_connected: bool
+
+    local_path: str | None = None   # ← Add this line
+
+
     created_at: datetime
     updated_at: datetime
+
+class RepositoryStatusResponse(BaseModel):
+    branch: str
+    clean: bool
+    modified: list[str]
+    untracked: list[str]
+    staged: list[str]

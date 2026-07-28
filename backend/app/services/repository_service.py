@@ -1,5 +1,8 @@
 from uuid import UUID
+from pathlib import Path
 
+from app.git.workspace import repository_workspace
+from app.git.git_service import GitService
 from app.models.repository import Repository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.repository_repository import RepositoryRepository
@@ -20,7 +23,8 @@ class RepositoryNotFoundError(RepositoryServiceError):
 class DuplicateRepositoryNameError(RepositoryServiceError):
     """Raised when a duplicate repository name exists in a project."""
 
-
+class RepositoryNotConnectedError(RepositoryServiceError):
+    """Raised when a repository has no remote URL."""
 class UnauthorizedRepositoryAccessError(RepositoryServiceError):
     """Raised when a user accesses a repository they do not own."""
 
@@ -30,9 +34,11 @@ class RepositoryService:
         self,
         repository: RepositoryRepository,
         project_repository: ProjectRepository,
+        git_service: GitService,
     ) -> None:
         self.repository = repository
         self.project_repository = project_repository
+        self.git_service = git_service
 
     async def create_repository(
         self,
@@ -108,6 +114,63 @@ class RepositoryService:
 
         return repository
 
+    async def clone_repository(
+    self,
+    repository_id: UUID,
+    owner_id: UUID,
+    ) -> Repository:
+        """
+        Clone a repository into the local workspace.
+        """
+
+        repository = await self.get_repository(
+            repository_id,
+            owner_id,
+        )
+
+        if not repository.remote_url:
+            raise RepositoryNotConnectedError(
+                "Repository has no remote URL."
+            )
+
+        destination = repository_workspace(
+            str(repository.project_id),
+            str(repository.id),
+        )
+
+        self.git_service.clone_repository(
+            remote_url=repository.remote_url,
+            destination=destination,
+        )
+
+        return await self.repository.update_local_path(
+            repository,
+            str(destination),
+        )
+
+    async def get_repository_status(
+    self,
+    repository_id: UUID,
+    owner_id: UUID,
+    ) -> dict:
+        """
+        Return the Git status of a cloned repository.
+        """
+
+        repository = await self.get_repository(
+            repository_id,
+            owner_id,
+        )
+
+        if repository.local_path is None:
+            raise RepositoryNotConnectedError(
+                "Repository has not been cloned."
+            )
+
+        return self.git_service.get_status(
+            Path(repository.local_path)
+        )
+
     async def update_repository(
         self,
         repository_id: UUID,
@@ -150,3 +213,5 @@ class RepositoryService:
         )
 
         await self.repository.delete(repository)
+
+  
